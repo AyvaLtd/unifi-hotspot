@@ -7,7 +7,9 @@ import { config } from '../utils/config';
 import { expressPino } from '../utils/logger';
 
 const app = express();
-const unifiSiteIdentifier = config.unifiSiteIdentifier;
+// Use first controller's site identifier for portal URL
+const unifiSiteIdentifier =
+  config.unifiControllers[0]?.siteIdentifier || 'default';
 
 app.set('view engine', 'ejs');
 app.set('views', 'views');

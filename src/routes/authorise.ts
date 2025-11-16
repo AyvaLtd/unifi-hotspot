@@ -53,48 +53,9 @@ async function authorizeOnController(
 }
 
 /**
- * Legacy single-controller authorization
+ * Authorize guest on configured controllers
  */
-async function legacyAuthorize(req: Request, res: Response): Promise<void> {
-  const unifiApiClient = createAxiosInstance(undefined, req);
-  const selectedModules = unifiAuthServices[config.unifiControllerType];
-
-  logger.debug('Starting Unifi Login Attempt');
-  await selectedModules.login(unifiApiClient);
-
-  if (config.logAuthDriver) {
-    await logAuth(req.body);
-  }
-
-  logger.debug('Starting Unifi Device Authorisation Attempt');
-  await selectedModules.authorise(unifiApiClient, req);
-
-  if (config.showConnecting === 'true') {
-    logger.debug(`Redirecting to ${'./connecting'}`);
-    res.redirect('./connecting');
-  }
-
-  if (
-    config.showConnecting === 'false' &&
-    config.serverSideRedirect === 'true'
-  ) {
-    // sleep 5s
-    await new Promise((r) => setTimeout(r, 5000));
-    logger.debug(`Redirecting to ${config.redirectUrl}`);
-    res.redirect(config.redirectUrl);
-  }
-
-  logger.debug('Starting Unifi Logout Attempt');
-  await selectedModules.logout(unifiApiClient);
-}
-
-/**
- * Multi-controller authorization
- */
-async function multiControllerAuthorize(
-  req: Request,
-  res: Response,
-): Promise<void> {
+async function authorizeGuest(req: Request, res: Response): Promise<void> {
   const enabledControllers = config.unifiControllers.filter(
     (ctrl) => ctrl.enabled,
   );
@@ -147,11 +108,7 @@ async function multiControllerAuthorize(
 
 authoriseRouter.route('/').post(async (req: Request, res: Response) => {
   try {
-    if (config.enableMultiController) {
-      await multiControllerAuthorize(req, res);
-    } else {
-      await legacyAuthorize(req, res);
-    }
+    await authorizeGuest(req, res);
   } catch (err) {
     logger.error('Authorization error:', err);
     res.status(500).json({
