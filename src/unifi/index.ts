@@ -2,19 +2,20 @@
 import { AxiosInstance, AxiosResponse } from 'axios';
 import { UnifiApiService } from '../interfaces/UnifiApiService';
 import { logger } from '../utils/logger';
-import { config, ControllerConfig } from '../utils/config';
+import { ControllerConfig } from '../utils/config';
 
 export const standaloneUnifiModule: UnifiApiService = {
   login: async (
     unifiApiClient: AxiosInstance,
     controllerConfig?: ControllerConfig,
   ): Promise<AxiosResponse> => {
-    const username = controllerConfig?.username || config.unifiUsername;
-    const password = controllerConfig?.password || config.unifiPassword;
+    if (!controllerConfig) {
+      throw new Error('Controller configuration is required');
+    }
 
     const loginResponse = await unifiApiClient.post('/api/login', {
-      username,
-      password,
+      username: controllerConfig.username,
+      password: controllerConfig.password,
     });
 
     if (loginResponse.data.meta.rc === 'ok') {
@@ -29,8 +30,11 @@ export const standaloneUnifiModule: UnifiApiService = {
     req: any,
     controllerConfig?: ControllerConfig,
   ): Promise<AxiosResponse> => {
-    const siteIdentifier =
-      controllerConfig?.siteIdentifier || config.unifiSiteIdentifier;
+    if (!controllerConfig) {
+      throw new Error('Controller configuration is required');
+    }
+
+    const siteIdentifier = controllerConfig.siteIdentifier;
 
     const authorizeResponse = await unifiApiClient.post(
       `/api/s/${siteIdentifier}/cmd/stamgr`,
@@ -58,12 +62,13 @@ export const integratedUnifiModule: UnifiApiService = {
     unifiApiClient: AxiosInstance,
     controllerConfig?: ControllerConfig,
   ): Promise<AxiosResponse> => {
-    const username = controllerConfig?.username || config.unifiUsername;
-    const password = controllerConfig?.password || config.unifiPassword;
+    if (!controllerConfig) {
+      throw new Error('Controller configuration is required');
+    }
 
     const loginResponse = await unifiApiClient.post('/api/auth/login', {
-      username,
-      password,
+      username: controllerConfig.username,
+      password: controllerConfig.password,
     });
     unifiApiClient.defaults.headers.common['x-csrf-token'] =
       loginResponse.headers['x-csrf-token'];
@@ -82,8 +87,11 @@ export const integratedUnifiModule: UnifiApiService = {
     req: any,
     controllerConfig?: ControllerConfig,
   ): Promise<AxiosResponse> => {
-    const siteIdentifier =
-      controllerConfig?.siteIdentifier || config.unifiSiteIdentifier;
+    if (!controllerConfig) {
+      throw new Error('Controller configuration is required');
+    }
+
+    const siteIdentifier = controllerConfig.siteIdentifier;
 
     const authorizeResponse = await unifiApiClient.post(
       `/proxy/network/api/s/${siteIdentifier}/cmd/stamgr`,

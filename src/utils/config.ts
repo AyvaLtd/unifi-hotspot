@@ -29,18 +29,10 @@ export interface ControllerConfig {
 }
 
 type Config = {
-  // Legacy single-controller config (for backward compatibility)
-  unifiUsername: string;
-  unifiPassword: string;
-  unifiControllerUrl?: string;
-  unifiControllerType: UnifiControllerType;
-  unifiSiteIdentifier: string;
-
-  // New multi-controller config
+  // Multi-controller config (required)
   unifiControllers: ControllerConfig[];
-  enableMultiController: boolean;
 
-  // Other config
+  // Application config
   sessionSecret: string;
   auth: Auth;
   redirectUrl: string;
@@ -54,59 +46,63 @@ type Config = {
 function parseControllerConfig(): ControllerConfig[] {
   const controllersJson = process.env.UNIFI_CONTROLLERS;
 
-  if (controllersJson) {
-    try {
-      const parsed = JSON.parse(controllersJson);
-      if (Array.isArray(parsed)) {
-        return parsed.map((ctrl: any) => ({
-          url: ctrl.url || undefined,
-          username: ctrl.username,
-          password: ctrl.password,
-          type:
-            (ctrl.type as UnifiControllerType) ||
-            UnifiControllerType.Standalone,
-          siteIdentifier: ctrl.siteIdentifier || 'default',
-          enabled: ctrl.enabled !== false, // Default to true
-        }));
-      }
-    } catch (error) {
-      logger.error('Failed to parse UNIFI_CONTROLLERS JSON:', error);
-      process.exit(1);
-    }
+  if (!controllersJson) {
+    logger.error('UNIFI_CONTROLLERS environment variable is required');
+    logger.error(
+      'Example: UNIFI_CONTROLLERS=[{"url":"auto","username":"admin","password":"pass","type":"standalone","siteIdentifier":"default","enabled":true}]',
+    );
+    process.exit(1);
   }
 
-  // Fallback to legacy single-controller config
-  return [
-    {
-      url: process.env.UNIFI_CONTROLLER_URL || process.env.URI,
-      username: process.env.UNIFI_USER!,
-      password: process.env.UNIFI_PASS!,
-      type:
-        (process.env.UNIFI_CONTROLLER_TYPE as UnifiControllerType) ||
-        UnifiControllerType.Standalone,
-      siteIdentifier:
-        process.env.UNIFI_SITE_IDENTIFIER || process.env.SITENAME || 'default',
-      enabled: true,
-    },
-  ];
+  try {
+    const parsed = JSON.parse(controllersJson);
+    if (!Array.isArray(parsed)) {
+      logger.error('UNIFI_CONTROLLERS must be a JSON array');
+      process.exit(1);
+    }
+
+    if (parsed.length === 0) {
+      logger.error('UNIFI_CONTROLLERS array cannot be empty');
+      process.exit(1);
+    }
+
+    return parsed.map((ctrl: any, index: number) => {
+      // Validate required fields
+      if (!ctrl.username) {
+        logger.error(`Controller ${index}: missing required field 'username'`);
+        process.exit(1);
+      }
+      if (!ctrl.password) {
+        logger.error(`Controller ${index}: missing required field 'password'`);
+        process.exit(1);
+      }
+
+      return {
+        url: ctrl.url || 'auto', // Default to auto-detection
+        username: ctrl.username,
+        password: ctrl.password,
+        type:
+          (ctrl.type as UnifiControllerType) || UnifiControllerType.Integrated, // Default to integrated for UX7
+        siteIdentifier: ctrl.siteIdentifier || 'default',
+        enabled: ctrl.enabled !== false, // Default to true
+      };
+    });
+  } catch (error) {
+    logger.error('Failed to parse UNIFI_CONTROLLERS JSON:', error);
+    logger.error(
+      'Example: UNIFI_CONTROLLERS=[{"url":"auto","username":"admin","password":"pass","type":"integrated","siteIdentifier":"default","enabled":true}]',
+    );
+    process.exit(1);
+  }
 }
 
 const controllers = parseControllerConfig();
-const enableMultiController = !!process.env.UNIFI_CONTROLLERS;
 
 const config: Config = {
-  // Legacy config (first controller for backward compatibility)
-  unifiUsername: controllers[0]?.username || process.env.UNIFI_USER!,
-  unifiPassword: controllers[0]?.password || process.env.UNIFI_PASS!,
-  unifiControllerUrl: controllers[0]?.url,
-  unifiControllerType: controllers[0]?.type || UnifiControllerType.Standalone,
-  unifiSiteIdentifier: controllers[0]?.siteIdentifier || 'default',
-
-  // New multi-controller config
+  // Multi-controller config
   unifiControllers: controllers,
-  enableMultiController,
 
-  // Other config
+  // Application config
   sessionSecret: process.env.SESSION_SECRET || 'secret',
   auth: (process.env.AUTH as Auth) || Auth.Simple,
   redirectUrl: process.env.REDIRECTURL || '/success.html',
@@ -118,47 +114,36 @@ const config: Config = {
 };
 
 function checkForRequiredEnvVars(): void {
-  // If using multi-controller config, validate differently
-  if (process.env.UNIFI_CONTROLLERS) {
-    if (!config.unifiControllers || config.unifiControllers.length === 0) {
-      logger.error('UNIFI_CONTROLLERS is set but no valid controllers found');
-      process.exit(1);
-    }
-    // Validate each controller has required fields
-    config.unifiControllers.forEach((ctrl, index) => {
-      if (!ctrl.username || !ctrl.password) {
-        logger.error(`Controller ${index}: missing username or password`);
-        process.exit(1);
-      }
-    });
-  } else {
-    // Legacy validation - require single controller env vars
-    const requiredEnvVars = ['UNIFI_USER', 'UNIFI_PASS'];
-    requiredEnvVars.forEach((envVar) => {
-      if (!process.env[envVar]) {
-        logger.error(`Missing required environment variable: ${envVar}`);
-        process.exit(1);
-      }
-    });
-  }
-  logger.debug('All required environment variables are present');
-}
-
-function validateConfig(): void {
-  // Validate UnifiControllerType
-  if (
-    !Object.values(UnifiControllerType).includes(config.unifiControllerType)
-  ) {
-    logger.error(
-      `Invalid value for UNIFI_CONTROLLER_TYPE. Expected one of: ${Object.values(UnifiControllerType).join(', ')}`,
-    );
+  // Validate controllers are configured
+  if (!config.unifiControllers || config.unifiControllers.length === 0) {
+    logger.error('No valid controllers configured');
     process.exit(1);
   }
 
+  // Validate each controller
+  config.unifiControllers.forEach((ctrl, index) => {
+    if (!ctrl.username || !ctrl.password) {
+      logger.error(`Controller ${index}: missing username or password`);
+      process.exit(1);
+    }
+
+    // Validate controller type
+    if (!Object.values(UnifiControllerType).includes(ctrl.type)) {
+      logger.error(
+        `Controller ${index}: Invalid type '${ctrl.type}'. Expected one of: ${Object.values(UnifiControllerType).join(', ')}`,
+      );
+      process.exit(1);
+    }
+  });
+
+  logger.debug('All required controller configurations are valid');
+}
+
+function validateConfig(): void {
   // Validate LogAuthDriver
   if (!Object.values(LogAuthDriver).includes(config.logAuthDriver)) {
     logger.error(
-      `Invalid value for LOG_AUTH_DRIVERS. Expected one of: ${Object.values(LogAuthDriver).join(', ')}`,
+      `Invalid value for LOG_AUTH_DRIVER. Expected one of: ${Object.values(LogAuthDriver).join(', ')}`,
     );
     process.exit(1);
   }
@@ -172,14 +157,17 @@ function validateConfig(): void {
   }
 
   logger.debug('Configuration is valid');
-
-  // If integrated ignore site identifier
+  logger.info(`Configured ${config.unifiControllers.length} controller(s)`);
+  config.unifiControllers.forEach((ctrl, index) => {
+    const urlDisplay =
+      ctrl.url === 'auto' ? 'auto-detect' : ctrl.url || 'auto-detect';
+    logger.info(`  Controller ${index}: ${urlDisplay} (${ctrl.type})`);
+  });
 }
 
 function maskSensitiveConfig(config: Config): Partial<Config> {
   return {
     ...config,
-    unifiPassword: '****',
     unifiControllers: config.unifiControllers.map((ctrl) => ({
       ...ctrl,
       password: '****',
