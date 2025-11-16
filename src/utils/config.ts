@@ -20,7 +20,7 @@ export enum Auth {
 }
 
 export interface ControllerConfig {
-  url?: string; // Optional - can be "auto" or empty for dynamic detection
+  url: string; // Required - controller URL (e.g., https://192.168.1.1)
   username: string;
   password: string;
   type: UnifiControllerType;
@@ -49,7 +49,7 @@ function parseControllerConfig(): ControllerConfig[] {
   if (!controllersJson) {
     logger.error('UNIFI_CONTROLLERS environment variable is required');
     logger.error(
-      'Example: UNIFI_CONTROLLERS=[{"url":"auto","username":"admin","password":"pass","type":"standalone","siteIdentifier":"default","enabled":true}]',
+      'Example: UNIFI_CONTROLLERS=[{"url":"https://192.168.1.1","username":"admin","password":"pass","type":"integrated","siteIdentifier":"default","enabled":true}]',
     );
     process.exit(1);
   }
@@ -68,6 +68,11 @@ function parseControllerConfig(): ControllerConfig[] {
 
     return parsed.map((ctrl: any, index: number) => {
       // Validate required fields
+      if (!ctrl.url) {
+        logger.error(`Controller ${index}: missing required field 'url'`);
+        logger.error('Example: "url":"https://192.168.1.1"');
+        process.exit(1);
+      }
       if (!ctrl.username) {
         logger.error(`Controller ${index}: missing required field 'username'`);
         process.exit(1);
@@ -78,7 +83,7 @@ function parseControllerConfig(): ControllerConfig[] {
       }
 
       return {
-        url: ctrl.url || 'auto', // Default to auto-detection
+        url: ctrl.url,
         username: ctrl.username,
         password: ctrl.password,
         type:
@@ -90,7 +95,7 @@ function parseControllerConfig(): ControllerConfig[] {
   } catch (error) {
     logger.error('Failed to parse UNIFI_CONTROLLERS JSON:', error);
     logger.error(
-      'Example: UNIFI_CONTROLLERS=[{"url":"auto","username":"admin","password":"pass","type":"integrated","siteIdentifier":"default","enabled":true}]',
+      'Example: UNIFI_CONTROLLERS=[{"url":"https://192.168.1.1","username":"admin","password":"pass","type":"integrated","siteIdentifier":"default","enabled":true}]',
     );
     process.exit(1);
   }
@@ -159,9 +164,7 @@ function validateConfig(): void {
   logger.debug('Configuration is valid');
   logger.info(`Configured ${config.unifiControllers.length} controller(s)`);
   config.unifiControllers.forEach((ctrl, index) => {
-    const urlDisplay =
-      ctrl.url === 'auto' ? 'auto-detect' : ctrl.url || 'auto-detect';
-    logger.info(`  Controller ${index}: ${urlDisplay} (${ctrl.type})`);
+    logger.info(`  Controller ${index}: ${ctrl.url} (${ctrl.type})`);
   });
 }
 

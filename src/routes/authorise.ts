@@ -23,11 +23,11 @@ async function authorizeOnController(
   req: Request,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const unifiApiClient = createAxiosInstance(controllerConfig.url, req);
+    const unifiApiClient = createAxiosInstance(controllerConfig.url);
     const selectedModule = unifiAuthServices[controllerConfig.type];
 
     logger.info(
-      `Authorizing on controller: ${controllerConfig.url || 'auto-detect'} (${controllerConfig.type})`,
+      `Authorizing on controller: ${controllerConfig.url} (${controllerConfig.type})`,
     );
 
     // Login to controller with controller-specific credentials
@@ -40,13 +40,13 @@ async function authorizeOnController(
     await selectedModule.logout(unifiApiClient);
 
     logger.info(
-      `Successfully authorized on controller: ${controllerConfig.url || 'auto-detect'}`,
+      `Successfully authorized on controller: ${controllerConfig.url}`,
     );
     return { success: true };
   } catch (err: any) {
     const errorMsg = err?.message || 'Unknown error';
     logger.error(
-      `Failed to authorize on controller ${controllerConfig.url || 'auto-detect'}: ${errorMsg}`,
+      `Failed to authorize on controller ${controllerConfig.url}: ${errorMsg}`,
     );
     return { success: false, error: errorMsg };
   }
@@ -54,6 +54,7 @@ async function authorizeOnController(
 
 /**
  * Authorize guest on configured controllers
+ * Returns immediately on first success, but continues all requests in background
  */
 async function authorizeGuest(req: Request, res: Response): Promise<void> {
   const enabledControllers = config.unifiControllers.filter(
@@ -69,39 +70,82 @@ async function authorizeGuest(req: Request, res: Response): Promise<void> {
     await logAuth(req.body);
   }
 
-  // Authorize on all controllers in parallel
-  const results = await Promise.allSettled(
-    enabledControllers.map((ctrl) => authorizeOnController(ctrl, req)),
+  // Start authorization on all controllers in parallel
+  const authPromises = enabledControllers.map((ctrl) =>
+    authorizeOnController(ctrl, req),
   );
 
-  // Check results
-  const successes = results.filter(
-    (r) => r.status === 'fulfilled' && r.value.success,
-  );
-  const failures = results.filter(
-    (r) =>
-      r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success),
+  // Race all promises - return immediately on first success
+  let hasResponded = false;
+  let successCount = 0;
+  let failureCount = 0;
+
+  // Process results as they complete
+  const racePromise = Promise.race(
+    authPromises.map(async (promise, index) => {
+      try {
+        const result = await promise;
+        if (result.success && !hasResponded) {
+          hasResponded = true;
+          successCount++;
+          logger.info(
+            `First controller succeeded (${enabledControllers[index].url}), responding to client`,
+          );
+          return { success: true, index };
+        }
+        if (result.success) {
+          successCount++;
+        } else {
+          failureCount++;
+        }
+        return { success: result.success, index };
+      } catch (error) {
+        failureCount++;
+        return { success: false, index };
+      }
+    }),
   );
 
-  logger.info(
-    `Authorization complete: ${successes.length} succeeded, ${failures.length} failed`,
-  );
+  // Wait for first success or all failures
+  try {
+    const firstResult = await Promise.race([
+      racePromise,
+      // If all fail, wait for all to complete
+      Promise.allSettled(authPromises).then(() => ({
+        success: false,
+        index: -1,
+      })),
+    ]);
 
-  // If at least one succeeded, consider it a success
-  if (successes.length > 0) {
-    if (config.showConnecting === 'true') {
-      logger.debug(`Redirecting to ${'./connecting'}`);
-      res.redirect('./connecting');
-    } else if (config.serverSideRedirect === 'true') {
-      // sleep 5s
-      await new Promise((r) => setTimeout(r, 5000));
-      logger.debug(`Redirecting to ${config.redirectUrl}`);
-      res.redirect(config.redirectUrl);
+    if (firstResult.success) {
+      // Respond to client immediately
+      if (config.showConnecting === 'true') {
+        logger.debug(`Redirecting to ${'./connecting'}`);
+        res.redirect('./connecting');
+      } else if (config.serverSideRedirect === 'true') {
+        // sleep 5s
+        await new Promise((r) => setTimeout(r, 5000));
+        logger.debug(`Redirecting to ${config.redirectUrl}`);
+        res.redirect(config.redirectUrl);
+      } else {
+        res.status(200).json({ success: true });
+      }
+
+      // Continue processing remaining controllers in background
+      Promise.allSettled(authPromises).then((results) => {
+        const finalSuccesses = results.filter(
+          (r) => r.status === 'fulfilled' && r.value.success,
+        ).length;
+        const finalFailures = results.length - finalSuccesses;
+        logger.info(
+          `All controller authorizations complete: ${finalSuccesses} succeeded, ${finalFailures} failed`,
+        );
+      });
     } else {
-      res.status(200).json({ success: true });
+      // All controllers failed
+      throw new Error('Failed to authorize on all controllers');
     }
-  } else {
-    // All controllers failed
+  } catch (error) {
     throw new Error('Failed to authorize on all controllers');
   }
 }
